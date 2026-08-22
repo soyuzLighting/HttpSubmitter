@@ -7,8 +7,8 @@ import java.util.Map;
 /**
  * 一条通知消息：携带完整 HTTP 请求信息（url/method/headers/body），消费端据此通用投递。
  *
- * <p>序列化字段：messageId, topic, key, createTime, retryCount, url, method, headers, body, flags。
- * {@code offset} 与 {@code partition} 不参与序列化，由服务端从存储记录填充。</p>
+ * <p>序列化字段：messageId, offset, partition, topic, key, createTime, retryCount, url, method, headers, body, flags。
+ * 生产时 {@code offset}/{@code partition} 尚未确定（均为 -1），由服务端在写入与拉取时填充。</p>
  */
 public final class Message {
 
@@ -60,6 +60,8 @@ public final class Message {
     public byte[] encode() {
         ByteWriter w = new ByteWriter();
         w.putLong(messageId);
+        w.putLong(offset);
+        w.putVarInt(partition);
         w.putString(topic);
         w.putString(key);
         w.putLong(createTime);
@@ -79,6 +81,8 @@ public final class Message {
     public static Message decode(ByteBuffer buf) {
         Message m = new Message();
         m.messageId = ByteReader.readLong(buf);
+        m.offset = ByteReader.readLong(buf);
+        m.partition = ByteReader.readVarInt(buf);
         m.topic = ByteReader.readString(buf);
         m.key = ByteReader.readString(buf);
         m.createTime = ByteReader.readLong(buf);

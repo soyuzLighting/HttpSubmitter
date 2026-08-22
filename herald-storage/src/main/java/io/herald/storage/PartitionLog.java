@@ -140,6 +140,9 @@ public final class PartitionLog implements AutoCloseable {
                 consumed += e.payload().length;
             }
             remainingBytes -= consumed;
+            if (remainingBytes <= 0) {
+                break;
+            }
         }
         return out;
     }

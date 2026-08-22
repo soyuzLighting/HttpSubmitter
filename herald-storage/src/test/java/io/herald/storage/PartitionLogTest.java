@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -94,6 +95,50 @@ class PartitionLogTest {
                     log.append(("p" + i).getBytes());
                 }
                 assertArrayEquals("p19".getBytes(), log.read(19));
+            }
+        }
+    }
+
+    @Test
+    void readBatchHonorsLimits() throws IOException {
+        Path dir = tmp.resolve("batch");
+        LogConfig cfg = new LogConfig().segmentBytes(1024 * 1024);
+        try (PartitionLog log = PartitionLog.open(dir, cfg)) {
+            for (int i = 0; i < 10; i++) {
+                log.append(("v" + i).getBytes()); // 每条负载 2 字节
+            }
+            List<LogEntry> all = log.readBatch(0, 100, 1024 * 1024);
+            assertEquals(10, all.size());
+            for (int i = 0; i < 10; i++) {
+                assertEquals(i, all.get(i).offset());
+                assertArrayEquals(("v" + i).getBytes(), all.get(i).payload());
+            }
+
+            List<LogEntry> limited = log.readBatch(0, 3, 1024 * 1024);
+            assertEquals(3, limited.size());
+            assertEquals(0, limited.get(0).offset());
+            assertEquals(2, limited.get(2).offset());
+
+            // maxBytes 截断：首条即使超限也返回，以推进进度
+            List<LogEntry> byBytes = log.readBatch(0, 100, 3);
+            assertEquals(2, byBytes.size());
+            assertEquals(0, byBytes.get(0).offset());
+            assertEquals(1, byBytes.get(1).offset());
+        }
+    }
+
+    @Test
+    void readBatchAcrossSegments() throws IOException {
+        Path dir = tmp.resolve("batch-cross");
+        LogConfig cfg = new LogConfig().segmentBytes(LogRecord.HEADER_SIZE + 4);
+        try (PartitionLog log = PartitionLog.open(dir, cfg)) {
+            for (int i = 0; i < 20; i++) {
+                log.append(new byte[]{1, 2, 3, 4});
+            }
+            List<LogEntry> batch = log.readBatch(0, 100, 1024 * 1024);
+            assertEquals(20, batch.size());
+            for (int i = 0; i < 20; i++) {
+                assertEquals(i, batch.get(i).offset());
             }
         }
     }
