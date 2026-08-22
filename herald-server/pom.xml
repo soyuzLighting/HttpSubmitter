@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>io.herald</groupId>
+        <artifactId>herald-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>herald-server</artifactId>
+    <name>herald-server</name>
+    <description>Broker: Netty data plane, partition management, replication and metadata</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.herald</groupId>
+            <artifactId>herald-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.herald</groupId>
+            <artifactId>herald-protocol</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.herald</groupId>
+            <artifactId>herald-storage</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.herald</groupId>
+            <artifactId>herald-raft</artifactId>
+        </dependency>
+    </dependencies>
+</project>
