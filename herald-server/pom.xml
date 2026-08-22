@@ -30,5 +30,13 @@
             <groupId>io.herald</groupId>
             <artifactId>herald-raft</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport</artifactId>
+        </dependency>
     </dependencies>
 </project>

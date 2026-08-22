@@ -6,6 +6,8 @@ import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 一个段（segment）：磁盘上一个按起始 offset 命名的 {@code .log} 文件。
@@ -128,6 +130,46 @@ public final class LogSegment {
             }
         }
         return null;
+    }
+
+    /**
+     * 从 {@code startOffset} 起顺序读取一批记录。
+     *
+     * @param maxCount 最多返回的条数
+     * @param maxBytes 返回条目负载总字节数的上限；首个条目即使超限也会返回以推进进度
+     */
+    List<LogEntry> readBatch(long startOffset, int maxCount, int maxBytes) {
+        List<LogEntry> out = new ArrayList<>();
+        if (maxCount <= 0) {
+            return out;
+        }
+        long rel = startOffset - baseOffset;
+        if (rel < 0) {
+            rel = 0;
+        }
+        long pos = index.lookup(rel);
+        if (pos < 0) {
+            return out;
+        }
+        ByteBuffer buf = buffer.duplicate();
+        buf.position((int) pos);
+        long limit = writePosition;
+        int bytes = 0;
+        while (buf.position() < limit && out.size() < maxCount) {
+            LogRecord.Decoded d = LogRecord.decode(buf);
+            if (d == null) {
+                break;
+            }
+            if (d.offset < startOffset) {
+                continue; // 索引粒度导致落在目标之前，跳过
+            }
+            if (bytes + d.payload.length > maxBytes && !out.isEmpty()) {
+                break;
+            }
+            out.add(new LogEntry(d.offset, d.payload));
+            bytes += d.payload.length;
+        }
+        return out;
     }
 
     boolean canAppend(int recordSize) {

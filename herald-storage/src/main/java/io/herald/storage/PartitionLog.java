@@ -113,6 +113,37 @@ public final class PartitionLog implements AutoCloseable {
         return seg == null ? null : seg.read(offset);
     }
 
+    /**
+     * 从 {@code startOffset} 起跨段顺序读取一批记录。
+     *
+     * @param maxCount 最多返回条数
+     * @param maxBytes 返回条目负载总字节数上限
+     */
+    public List<LogEntry> readBatch(long startOffset, int maxCount, int maxBytes) {
+        List<LogEntry> out = new ArrayList<>();
+        long offset = startOffset;
+        int remainingBytes = maxBytes;
+        while (out.size() < maxCount) {
+            LogSegment seg = findSegment(offset);
+            if (seg == null) {
+                break;
+            }
+            List<LogEntry> batch = seg.readBatch(offset, maxCount - out.size(), remainingBytes);
+            if (batch.isEmpty()) {
+                break;
+            }
+            out.addAll(batch);
+            LogEntry last = out.get(out.size() - 1);
+            offset = last.offset() + 1;
+            int consumed = 0;
+            for (LogEntry e : batch) {
+                consumed += e.payload().length;
+            }
+            remainingBytes -= consumed;
+        }
+        return out;
+    }
+
     /** 立即刷盘（异步模式下通常由后台线程触发）。 */
     public void flush() {
         synchronized (writeLock) {
