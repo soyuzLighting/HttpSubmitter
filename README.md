@@ -151,12 +151,12 @@ python3 herald-scripts/message_loss_test.py \
 
 ## 7. 配置与语义速览
 
-| 维度 | 选项 |
-|------|------|
-| 刷盘 | `flush.mode=async`（高吞吐） / `sync`（零丢失） |
+| 维度 | 选项                                       |
+|----|------------------------------------------|
+| 刷盘 | `flush.mode=async`（高吞吐） / `sync`（零丢失）    |
 | 确认 | `acks=0`（不等）/ `1`（Leader）/ `-1`（ISR 全确认） |
 | 语义 | 至少一次（at-least-once），下游按 `messageId` 幂等去重 |
-| 死信 | 重试达上限写入 `{topic}.DLQ` |
+| 死信 | 重试达上限写入 `{topic}.DLQ`                    |
 
 ---
 
