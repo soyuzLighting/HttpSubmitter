@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -64,6 +65,7 @@ public final class Broker implements AutoCloseable, RaftEventListener {
     private final ReplicationManager replicationManager;
     private final Set<Integer> deadBrokers = ConcurrentHashMap.newKeySet();
     private final AtomicLong partitionCounter = new AtomicLong();
+    private final AtomicBoolean closed = new AtomicBoolean();
     private final java.util.concurrent.ExecutorService controllerExecutor;
 
     private EventLoopGroup bossGroup;
@@ -324,12 +326,21 @@ public final class Broker implements AutoCloseable, RaftEventListener {
         }
     }
 
+    /** 后台注册自身到集群：Raft 需多数派才可提交，节点启动先后不一，故重试直至成功。 */
     private void registerSelf() {
-        try {
-            raftNode.submit(ClusterMetadata.registerBroker(nodeId, config.advertisedHost(), localPort(), config.raftPort()));
-        } catch (RuntimeException e) {
-            log.warn("broker self-registration failed", e);
-        }
+        int port = localPort();
+        controllerExecutor.submit(() -> {
+            while (!closed.get()) {
+                try {
+                    raftNode.submit(ClusterMetadata.registerBroker(nodeId, config.advertisedHost(), port, config.raftPort()));
+                    log.info("broker {} registered to cluster at {}:{}", nodeId, config.advertisedHost(), port);
+                    return;
+                } catch (RuntimeException e) {
+                    log.warn("broker self-registration failed, retrying", e);
+                }
+                sleepQuietly(500);
+            }
+        });
     }
 
     private int resolvePartition(String topic, int requested, String key) {
@@ -421,6 +432,14 @@ public final class Broker implements AutoCloseable, RaftEventListener {
         return new SocketRaftTransport(config.advertisedHost(), config.raftPort(), peerAddrs, 2000);
     }
 
+    private static void sleepQuietly(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private static int parseNodeId(String value) {
         if (value == null) {
             return -1;
@@ -443,6 +462,7 @@ public final class Broker implements AutoCloseable, RaftEventListener {
 
     @Override
     public void close() {
+        closed.set(true);
         replicationManager.close();
         controllerExecutor.shutdownNow();
         if (serverChannel != null) {

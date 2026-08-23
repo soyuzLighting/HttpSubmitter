@@ -238,19 +238,22 @@ public abstract class RaftMessage {
         }
     }
 
-    /** 提交响应。 */
+    /** 提交响应。index 为 leader 分配并已提交的日志下标，供 follower 等待本地状态机追上。 */
     public static final class ProposeResponse extends RaftMessage {
         private long term;
         private boolean success;
         private int leaderId = -1;
+        private long index = -1;
 
         public ProposeResponse term(long v) { this.term = v; return this; }
         public ProposeResponse success(boolean v) { this.success = v; return this; }
         public ProposeResponse leaderId(int v) { this.leaderId = v; return this; }
+        public ProposeResponse index(long v) { this.index = v; return this; }
 
         public long term() { return term; }
         public boolean success() { return success; }
         public int leaderId() { return leaderId; }
+        public long index() { return index; }
 
         @Override
         public byte type() { return PROPOSE_RESPONSE; }
@@ -262,6 +265,7 @@ public abstract class RaftMessage {
             w.putLong(term);
             w.putByte((byte) (success ? 1 : 0));
             w.putVarInt(leaderId);
+            w.putLong(index);
             return w.toByteArray();
         }
 
@@ -270,6 +274,7 @@ public abstract class RaftMessage {
             m.term = b.getLong();
             m.success = b.get() == 1;
             m.leaderId = ByteReader.readVarInt(b);
+            m.index = b.getLong();
             return m;
         }
     }

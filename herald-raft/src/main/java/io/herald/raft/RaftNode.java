@@ -102,7 +102,7 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
         long deadline = System.currentTimeMillis() + config.rpcTimeoutMs() * 3;
         while (System.currentTimeMillis() < deadline) {
             if (isLeader()) {
-                if (proposeAsLeader(command)) {
+                if (proposeAsLeader(command) >= 0) {
                     return;
                 }
             }
@@ -116,6 +116,7 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
                         continue;
                     }
                     if (r.success()) {
+                        waitApplied(r.index());
                         return;
                     }
                     if (r.leaderId() >= 0) {
@@ -189,8 +190,8 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
     private RaftMessage handlePropose(Propose m) {
         stepDownIfStale(m.term());
         if (isLeader()) {
-            boolean ok = proposeAsLeader(m.command());
-            return new ProposeResponse().term(currentTerm).success(ok).leaderId(nodeId);
+            long idx = proposeAsLeader(m.command());
+            return new ProposeResponse().term(currentTerm).success(idx >= 0).leaderId(nodeId).index(idx);
         }
         int lid = leaderId;
         if (lid < 0) {
@@ -311,7 +312,8 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
         }
     }
 
-    private boolean proposeAsLeader(byte[] command) {
+    /** leader 追加命令并推进提交，返回已提交的日志下标；未提交返回 -1。 */
+    private long proposeAsLeader(byte[] command) {
         long index;
         synchronized (lock) {
             index = logStore.append(currentTerm, command);
@@ -324,7 +326,7 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
             }
         }
         advanceCommit();
-        return waitCommitted(index);
+        return waitCommitted(index) ? index : -1;
     }
 
     private void advanceCommit() {
@@ -373,6 +375,14 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
             sleep(2);
         }
         return false;
+    }
+
+    /** follower 等待本地状态机应用到 leader 已提交的日志下标（靠下一次心跳推进 commitIndex）。 */
+    private void waitApplied(long index) {
+        long deadline = System.currentTimeMillis() + config.rpcTimeoutMs();
+        while (lastApplied < index && System.currentTimeMillis() < deadline) {
+            sleep(2);
+        }
     }
 
     // ---- 状态辅助 ----

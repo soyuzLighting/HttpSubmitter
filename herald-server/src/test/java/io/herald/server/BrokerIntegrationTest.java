@@ -114,8 +114,8 @@ class BrokerIntegrationTest {
 
         MetadataResponse md = MetadataResponse.decode(ByteBuffer.wrap(
                 roundTrip(Opcode.METADATA, new MetadataRequest().encode()).body()));
-        assertTrue(md.topics().containsKey("t"));
-        assertEquals(2, md.topics().get("t"));
+        assertEquals(2, md.partitionCount("t"));
+        assertEquals(0, md.leaderOf("t", 0));
 
         HeartbeatResponse hb = HeartbeatResponse.decode(ByteBuffer.wrap(
                 roundTrip(Opcode.HEARTBEAT, new HeartbeatRequest().clientId("c1").encode()).body()));
