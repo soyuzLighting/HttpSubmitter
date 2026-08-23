@@ -29,19 +29,23 @@ public final class BrokerConnection implements AutoCloseable {
     private final int port;
     private final EventLoopGroup group;
     private final Channel channel;
+    private final ConcurrentHashMap<String, CompletableFuture<Frame>> pending;
     private final AtomicLong seq = new AtomicLong();
-    private final ConcurrentHashMap<String, CompletableFuture<Frame>> pending = new ConcurrentHashMap<>();
 
-    private BrokerConnection(String host, int port, EventLoopGroup group, Channel channel) {
+    private BrokerConnection(String host, int port, EventLoopGroup group, Channel channel,
+                             ConcurrentHashMap<String, CompletableFuture<Frame>> pending) {
         this.host = host;
         this.port = port;
         this.group = group;
         this.channel = channel;
+        this.pending = pending;
     }
 
     public static BrokerConnection connect(String host, int port, int connectTimeoutMs, int maxFrameSize)
             throws InterruptedException {
         EventLoopGroup group = new NioEventLoopGroup(1);
+        ConcurrentHashMap<String, CompletableFuture<Frame>> pending = new ConcurrentHashMap<>();
+        String address = host + ":" + port;
         Bootstrap b = new Bootstrap();
         b.group(group)
                 .channel(NioSocketChannel.class)
@@ -53,11 +57,11 @@ public final class BrokerConnection implements AutoCloseable {
                         ch.pipeline()
                                 .addLast(new FrameDecoder(maxFrameSize))
                                 .addLast(new FrameEncoder())
-                                .addLast(new ClientHandler());
+                                .addLast(new ClientHandler(pending, address));
                     }
                 });
         Channel channel = b.connect(host, port).sync().channel();
-        return new BrokerConnection(host, port, group, channel);
+        return new BrokerConnection(host, port, group, channel, pending);
     }
 
     /** 发送请求帧并返回响应 Future（按 requestId 关联）。 */
@@ -86,14 +90,15 @@ public final class BrokerConnection implements AutoCloseable {
         group.shutdownGracefully();
     }
 
-    private void failAll(Throwable cause) {
-        for (CompletableFuture<Frame> f : pending.values()) {
-            f.completeExceptionally(cause);
-        }
-        pending.clear();
-    }
+    private static final class ClientHandler extends SimpleChannelInboundHandler<Frame> {
 
-    private final class ClientHandler extends SimpleChannelInboundHandler<Frame> {
+        private final ConcurrentHashMap<String, CompletableFuture<Frame>> pending;
+        private final String address;
+
+        ClientHandler(ConcurrentHashMap<String, CompletableFuture<Frame>> pending, String address) {
+            this.pending = pending;
+            this.address = address;
+        }
 
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, Frame frame) {
@@ -108,13 +113,20 @@ public final class BrokerConnection implements AutoCloseable {
 
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
-            failAll(new IOException("connection closed: " + address()));
+            failAll(new IOException("connection closed: " + address));
         }
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             failAll(cause);
             ctx.close();
+        }
+
+        private void failAll(Throwable cause) {
+            for (CompletableFuture<Frame> f : pending.values()) {
+                f.completeExceptionally(cause);
+            }
+            pending.clear();
         }
     }
 }
