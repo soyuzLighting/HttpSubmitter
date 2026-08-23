@@ -22,5 +22,15 @@
             <groupId>io.herald</groupId>
             <artifactId>herald-protocol</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.herald</groupId>
+            <artifactId>herald-server</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.herald</groupId>
+            <artifactId>herald-producer</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
