@@ -30,5 +30,10 @@
             <groupId>io.netty</groupId>
             <artifactId>netty-transport</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.herald</groupId>
+            <artifactId>herald-server</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
