@@ -8,6 +8,7 @@ public final class ErrorCode {
     public static final int OFFSET_OUT_OF_RANGE = 2;
     public static final int INTERNAL = 3;
     public static final int MESSAGE_TOO_LARGE = 4;
+    public static final int NOT_LEADER_OR_FOLLOWER = 5;
 
     private ErrorCode() {
     }

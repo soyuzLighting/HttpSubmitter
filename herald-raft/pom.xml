@@ -18,5 +18,9 @@
             <groupId>io.herald</groupId>
             <artifactId>herald-common</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.herald</groupId>
+            <artifactId>herald-protocol</artifactId>
+        </dependency>
     </dependencies>
 </project>
