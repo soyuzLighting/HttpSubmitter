@@ -308,6 +308,7 @@ public final class HeraldConsumer implements AutoCloseable {
         private DeliveryHandler deliveryHandler;
 
         public Builder bootstrapServers(String v) { config.bootstrapServers(v); return this; }
+        public Builder config(ConsumerConfig v) { this.config = v == null ? new ConsumerConfig() : v; return this; }
         public Builder groupId(String v) { config.groupId(v); return this; }
         public Builder topics(String... v) { config.topics(v); return this; }
         public Builder fetchMaxCount(int v) { config.fetchMaxCount(v); return this; }
