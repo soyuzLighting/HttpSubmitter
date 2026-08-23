@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -108,6 +109,65 @@ class HeraldConsumerTest {
         assertEquals(1, fetchCount("notify.DLQ", 0));
         // maxRetries=1 => 初始 + 1 次重试，共 2 次投递尝试
         assertEquals(2, receivedBodies.size());
+    }
+
+    @Test
+    void maxRetriesZeroImmediatelyDlqs() throws Exception {
+        startHttpServer(500);
+        String url = "http://127.0.0.1:" + httpServer.getAddress().getPort() + "/fail";
+
+        try (HeraldProducer producer = producer()) {
+            producer.send("notify", new Message().url(url).method("POST").body("no-retry".getBytes()));
+        }
+
+        HeraldConsumer consumer = HeraldConsumer.builder()
+                .bootstrapServers("127.0.0.1:" + broker.localPort())
+                .groupId("g0")
+                .topics("notify")
+                .pollIntervalMs(20)
+                .deliveryConfig(new DeliveryConfig().maxRetries(0).retryBackoffMs(10).timeoutMs(1000))
+                .build();
+        consumer.start();
+
+        waitUntil(() -> fetchCount("notify.DLQ", 0) >= 1, 5000);
+        consumer.close();
+
+        assertEquals(1, fetchCount("notify.DLQ", 0));
+        // maxRetries=0 => 仅 1 次投递尝试，失败直接进 DLQ
+        assertEquals(1, receivedBodies.size());
+    }
+
+    @Test
+    void transientFailureRecoversWithoutDlq() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        httpServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        httpServer.createContext("/", exchange -> {
+            receivedBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            int code = attempts.getAndIncrement() == 0 ? 500 : 200;
+            exchange.sendResponseHeaders(code, -1);
+            exchange.close();
+        });
+        httpServer.start();
+        String url = "http://127.0.0.1:" + httpServer.getAddress().getPort() + "/cb";
+
+        try (HeraldProducer producer = producer()) {
+            producer.send("notify", new Message().url(url).method("POST").body("retry-me".getBytes()));
+        }
+
+        HeraldConsumer consumer = HeraldConsumer.builder()
+                .bootstrapServers("127.0.0.1:" + broker.localPort())
+                .groupId("g-transient")
+                .topics("notify")
+                .pollIntervalMs(20)
+                .deliveryConfig(new DeliveryConfig().maxRetries(3).retryBackoffMs(10).timeoutMs(1000))
+                .build();
+        consumer.start();
+
+        waitUntil(() -> receivedBodies.size() >= 2, 5000);
+        consumer.close();
+
+        assertEquals(2, receivedBodies.size()); // 第一次 500 失败，重试 200 成功
+        assertEquals(0, fetchCount("notify.DLQ", 0)); // 未进 DLQ
     }
 
     private HeraldProducer producer() {

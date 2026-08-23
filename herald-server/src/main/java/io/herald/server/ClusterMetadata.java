@@ -23,12 +23,15 @@ public final class ClusterMetadata implements RaftStateMachine {
     static final byte CMD_REGISTER_BROKER = 1;
     static final byte CMD_CREATE_TOPIC = 2;
     static final byte CMD_ELECT_LEADER = 3;
+    static final byte CMD_COMMIT_OFFSET = 4;
 
     private record PartitionMeta(int leader, List<Integer> replicas) {
     }
 
     private final ConcurrentHashMap<Integer, Peer> brokers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, PartitionMeta[]> topics = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, ConcurrentHashMap<Integer, Long>>> offsets =
+            new ConcurrentHashMap<>();
 
     // ---- 命令编码（静态工厂） ----
 
@@ -57,6 +60,16 @@ public final class ClusterMetadata implements RaftStateMachine {
         w.putString(topic);
         w.putVarInt(partition);
         w.putVarInt(newLeader);
+        return w.toByteArray();
+    }
+
+    public static byte[] commitOffset(String groupId, String topic, int partition, long offset) {
+        ByteWriter w = new ByteWriter();
+        w.putByte(CMD_COMMIT_OFFSET);
+        w.putString(groupId);
+        w.putString(topic);
+        w.putVarInt(partition);
+        w.putLong(offset);
         return w.toByteArray();
     }
 
@@ -94,6 +107,15 @@ public final class ClusterMetadata implements RaftStateMachine {
                         metas[partition] = new PartitionMeta(newLeader, old.replicas());
                     }
                 }
+            }
+            case CMD_COMMIT_OFFSET -> {
+                String groupId = ByteReader.readString(buf);
+                String topic = ByteReader.readString(buf);
+                int partition = ByteReader.readVarInt(buf);
+                long offset = ByteReader.readLong(buf);
+                offsets.computeIfAbsent(groupId, g -> new ConcurrentHashMap<>())
+                        .computeIfAbsent(topic, t -> new ConcurrentHashMap<>())
+                        .put(partition, offset);
             }
             default -> throw new IllegalArgumentException("unknown metadata command: " + type);
         }
@@ -156,6 +178,20 @@ public final class ClusterMetadata implements RaftStateMachine {
             out.put(t, leaders);
         });
         return out;
+    }
+
+    /** 查询消费组在指定分区已提交的位点；无记录返回 -1。 */
+    public long committedOffset(String groupId, String topic, int partition) {
+        ConcurrentHashMap<String, ConcurrentHashMap<Integer, Long>> g = offsets.get(groupId);
+        if (g == null) {
+            return -1;
+        }
+        ConcurrentHashMap<Integer, Long> t = g.get(topic);
+        if (t == null) {
+            return -1;
+        }
+        Long v = t.get(partition);
+        return v == null ? -1 : v;
     }
 
     /** 返回本节点作为 follower 副本需要从 leader 拉取的分区（topic, partition, leader）。 */

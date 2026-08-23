@@ -13,6 +13,8 @@ import io.herald.protocol.Message;
 import io.herald.protocol.MetadataRequest;
 import io.herald.protocol.MetadataResponse;
 import io.herald.protocol.Opcode;
+import io.herald.protocol.OffsetFetchRequest;
+import io.herald.protocol.OffsetFetchResponse;
 import io.herald.protocol.ProduceRequest;
 import io.herald.protocol.ProduceResponse;
 import io.herald.raft.InMemoryRaftTransport;
@@ -59,7 +61,6 @@ public final class Broker implements AutoCloseable, RaftEventListener {
     private final int nodeId;
     private final SnowflakeIdGenerator idGen;
     private final TopicManager topicManager;
-    private final ConsumerOffsetManager offsetManager;
     private final ClusterMetadata clusterMetadata;
     private final RaftNode raftNode;
     private final ReplicationManager replicationManager;
@@ -77,11 +78,10 @@ public final class Broker implements AutoCloseable, RaftEventListener {
         this.nodeId = config.nodeId();
         this.idGen = new SnowflakeIdGenerator(config.nodeId());
         this.topicManager = new TopicManager(config.dataDir(), config.logConfig());
-        this.offsetManager = new ConsumerOffsetManager();
         this.clusterMetadata = new ClusterMetadata();
         this.raftNode = new RaftNode(raftConfig(config), raftTransport(config), clusterMetadata, this);
         this.replicationManager = new ReplicationManager(nodeId, clusterMetadata, topicManager,
-                config.replicaFetchIntervalMs());
+                config.replicaFetchIntervalMs(), deadBrokers);
         this.controllerExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "herald-controller-" + nodeId);
             t.setDaemon(true);
@@ -92,6 +92,7 @@ public final class Broker implements AutoCloseable, RaftEventListener {
     /** 启动 Raft、数据面与副本复制，并向集群注册自身。 */
     public void start() throws InterruptedException {
         raftNode.start();
+        reopenTopicLogs();
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup();
         ServerBootstrap b = new ServerBootstrap();
@@ -147,6 +148,8 @@ public final class Broker implements AutoCloseable, RaftEventListener {
                     return handleFetch(frame);
                 case Opcode.COMMIT_OFFSET:
                     return handleCommit(frame);
+                case Opcode.OFFSET_FETCH:
+                    return handleOffsetFetch(frame);
                 case Opcode.METADATA:
                     return handleMetadata(frame);
                 case Opcode.HEARTBEAT:
@@ -285,9 +288,24 @@ public final class Broker implements AutoCloseable, RaftEventListener {
 
     private Frame handleCommit(Frame frame) {
         CommitOffsetRequest req = CommitOffsetRequest.decode(ByteBuffer.wrap(frame.body()));
-        offsetManager.commit(req.groupId(), req.topic(), req.partition(), req.committedOffset());
         CommitOffsetResponse resp = new CommitOffsetResponse();
+        try {
+            raftNode.submit(ClusterMetadata.commitOffset(
+                    req.groupId(), req.topic(), req.partition(), req.committedOffset()));
+        } catch (RuntimeException e) {
+            log.warn("commit offset failed group={} topic={} partition={}",
+                    req.groupId(), req.topic(), req.partition(), e);
+            resp.errorCode(ErrorCode.INTERNAL);
+        }
         return respond(frame, Opcode.COMMIT_ACK, resp.encode());
+    }
+
+    private Frame handleOffsetFetch(Frame frame) {
+        OffsetFetchRequest req = OffsetFetchRequest.decode(ByteBuffer.wrap(frame.body()));
+        OffsetFetchResponse resp = new OffsetFetchResponse();
+        long committed = clusterMetadata.committedOffset(req.groupId(), req.topic(), req.partition());
+        resp.committedOffset(committed);
+        return respond(frame, Opcode.OFFSET_FETCH_RESPONSE, resp.encode());
     }
 
     private Frame handleMetadata(Frame frame) {
@@ -324,6 +342,19 @@ public final class Broker implements AutoCloseable, RaftEventListener {
                 throw new IllegalStateException("failed to open topic " + topic, e);
             }
         }
+    }
+
+    /** 崩溃恢复：Raft 重放元数据后，重新打开本节点已存在的分区日志，供读写。 */
+    private void reopenTopicLogs() {
+        clusterMetadata.topicLeaders().forEach((topic, leaders) -> {
+            if (topicManager.partitionCount(topic) == 0) {
+                try {
+                    topicManager.createTopic(topic, leaders.size());
+                } catch (IOException e) {
+                    log.warn("failed to reopen topic {} on recovery", topic, e);
+                }
+            }
+        });
     }
 
     /** 后台注册自身到集群：Raft 需多数派才可提交，节点启动先后不一，故重试直至成功。 */
@@ -415,7 +446,8 @@ public final class Broker implements AutoCloseable, RaftEventListener {
                 .electionTimeoutMinMs(150)
                 .electionTimeoutMaxMs(300)
                 .heartbeatIntervalMs(50)
-                .rpcTimeoutMs(2000);
+                .rpcTimeoutMs(2000)
+                .logDir(config.dataDir().resolve("raft"));
         config.peers().forEach((id, peer) -> raft.peer(id, peer.host() + ":" + peer.raftPort()));
         return raft;
     }

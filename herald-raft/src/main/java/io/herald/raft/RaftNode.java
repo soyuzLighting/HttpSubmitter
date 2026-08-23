@@ -32,7 +32,7 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
     private final RaftTransport transport;
     private final RaftStateMachine stateMachine;
     private final RaftEventListener listener;
-    private final RaftLog logStore = new RaftLog();
+    private final RaftLog logStore;
     private final Map<Integer, PeerState> peers = new ConcurrentHashMap<>();
 
     private final Object lock = new Object();
@@ -61,6 +61,8 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
         this.transport = transport;
         this.stateMachine = stateMachine;
         this.listener = listener;
+        this.logStore = config.logDir() != null ? new RaftLog(config.logDir()) : new RaftLog();
+        this.currentTerm = logStore.lastTerm();
         this.timer = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "herald-raft-" + nodeId);
             t.setDaemon(true);
@@ -73,12 +75,29 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
             return;
         }
         transport.start(this);
+        restoreState();
         if (config.peers().isEmpty()) {
             becomeLeader();
         } else {
             resetElectionDeadline();
         }
         timer.scheduleWithFixedDelay(this::tick, 10, 10, TimeUnit.MILLISECONDS);
+    }
+
+    /** 重放已持久化日志，重建状态机并恢复任期/提交位点。 */
+    private void restoreState() {
+        synchronized (applyLock) {
+            while (lastApplied < logStore.lastIndex()) {
+                long idx = lastApplied + 1;
+                byte[] command;
+                synchronized (lock) {
+                    command = logStore.entryAt(idx).command();
+                }
+                stateMachine.apply(idx, command);
+                lastApplied = idx;
+            }
+            commitIndex = lastApplied;
+        }
     }
 
     public int nodeId() {
@@ -261,7 +280,7 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
             leaderId = nodeId;
         }
         for (int peerId : config.peers().keySet()) {
-            peers.put(peerId, new PeerState(logStore.lastIndex() + 1, 0, false));
+            peers.put(peerId, new PeerState(logStore.lastIndex() + 1, 0, true));
         }
         if (listener != null) {
             listener.onLeaderElected(nodeId);
@@ -440,6 +459,7 @@ public final class RaftNode implements AutoCloseable, RaftTransport.MessageHandl
     public void close() {
         timer.shutdownNow();
         transport.close();
+        logStore.close();
     }
 
     private static final class PeerState {

@@ -10,6 +10,8 @@ import io.herald.protocol.Message;
 import io.herald.protocol.MetadataRequest;
 import io.herald.protocol.MetadataResponse;
 import io.herald.protocol.Opcode;
+import io.herald.protocol.OffsetFetchRequest;
+import io.herald.protocol.OffsetFetchResponse;
 import io.herald.protocol.ProduceRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -227,8 +229,9 @@ public final class HeraldConsumer implements AutoCloseable {
                 count = 1; // topic 尚未创建，先占位，后续 rediscover 更新
             }
             for (int p = 0; p < count; p++) {
-                long off = offsetOf(topic, p);
-                newCursors.add(new PartitionCursor(topic, p, off, leaderAddress(topic, p)));
+                String addr = leaderAddress(topic, p);
+                long off = offsetOf(topic, p, addr);
+                newCursors.add(new PartitionCursor(topic, p, off, addr));
             }
         }
         cursors = newCursors;
@@ -281,13 +284,29 @@ public final class HeraldConsumer implements AutoCloseable {
         return config.bootstrapServers().split(",")[0].trim();
     }
 
-    private long offsetOf(String topic, int partition) {
+    private long offsetOf(String topic, int partition, String address) {
         Map<Integer, Long> m = offsets.get(topic);
-        if (m == null) {
-            return config.initialOffset();
+        if (m != null) {
+            Long v = m.get(partition);
+            if (v != null) {
+                return v;
+            }
         }
-        Long v = m.get(partition);
-        return v == null ? config.initialOffset() : v;
+        long committed = fetchCommittedOffset(address, topic, partition);
+        return committed >= 0 ? committed : config.initialOffset();
+    }
+
+    /** 查询该消费组在 broker 端已提交的位点；失败或无记录返回 -1。 */
+    private long fetchCommittedOffset(String address, String topic, int partition) {
+        try {
+            OffsetFetchRequest req = new OffsetFetchRequest()
+                    .groupId(config.groupId()).topic(topic).partition(partition);
+            Frame resp = connectionFor(address).send(new Frame(Opcode.OFFSET_FETCH, Map.of(), req.encode()));
+            OffsetFetchResponse r = OffsetFetchResponse.decode(ByteBuffer.wrap(resp.body()));
+            return r.errorCode() == ErrorCode.OK ? r.committedOffset() : -1;
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     private ConsumerConnection connectionFor(String address) {

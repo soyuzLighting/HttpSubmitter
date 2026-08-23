@@ -1,5 +1,6 @@
 package io.herald.raft;
 
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -15,6 +16,7 @@ public final class RaftConfig {
     private long electionTimeoutMaxMs = 300;
     private long heartbeatIntervalMs = 50;
     private long rpcTimeoutMs = 2000;
+    private Path logDir;
 
     public int nodeId() { return nodeId; }
     public RaftConfig nodeId(int v) { this.nodeId = v; return this; }
@@ -40,4 +42,8 @@ public final class RaftConfig {
 
     public long rpcTimeoutMs() { return rpcTimeoutMs; }
     public RaftConfig rpcTimeoutMs(long v) { this.rpcTimeoutMs = v; return this; }
+
+    /** Raft 日志（WAL）持久化目录；为 null 表示纯内存（测试用）。 */
+    public Path logDir() { return logDir; }
+    public RaftConfig logDir(Path v) { this.logDir = v; return this; }
 }

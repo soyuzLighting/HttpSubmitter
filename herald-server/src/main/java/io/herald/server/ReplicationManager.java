@@ -17,6 +17,7 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -35,16 +36,19 @@ public final class ReplicationManager implements AutoCloseable {
     private final ClusterMetadata metadata;
     private final TopicManager topicManager;
     private final long pullIntervalMs;
+    private final Set<Integer> deadBrokers;
     private final ScheduledExecutorService puller;
 
     /** topic -> partition -> followerNodeId -> 该 follower 已复制到的 offset（下次将拉取的 offset）。 */
     private final Map<String, Map<Integer, Map<Integer, Long>>> followerProgress = new ConcurrentHashMap<>();
 
-    public ReplicationManager(int selfNodeId, ClusterMetadata metadata, TopicManager topicManager, long pullIntervalMs) {
+    public ReplicationManager(int selfNodeId, ClusterMetadata metadata, TopicManager topicManager,
+                              long pullIntervalMs, Set<Integer> deadBrokers) {
         this.selfNodeId = selfNodeId;
         this.metadata = metadata;
         this.topicManager = topicManager;
         this.pullIntervalMs = pullIntervalMs;
+        this.deadBrokers = deadBrokers;
         this.puller = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "herald-replicator-" + selfNodeId);
             t.setDaemon(true);
@@ -63,14 +67,14 @@ public final class ReplicationManager implements AutoCloseable {
                 .put(followerNodeId, nextFetchOffset);
     }
 
-    /** leader 等待所有 follower 副本复制到 {@code offset}（含）。 */
+    /** leader 等待所有存活 ISR 副本复制到 {@code offset}（含）；宕机副本跳过，避免 acks=-1 永久阻塞。 */
     public boolean awaitReplication(String topic, int partition, long offset, long timeoutMs) {
         List<Integer> replicas = metadata.replicasOf(topic, partition);
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
             boolean done = true;
             for (int replica : replicas) {
-                if (replica == selfNodeId) {
+                if (replica == selfNodeId || deadBrokers.contains(replica)) {
                     continue;
                 }
                 Long progress = progressOf(topic, partition, replica);

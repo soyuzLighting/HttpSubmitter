@@ -15,6 +15,8 @@ public final class Opcode {
     public static final byte HEARTBEAT_RESPONSE = 10;
     public static final byte REPLICA_FETCH = 11;   // 阶段 5 使用
     public static final byte REPLICA_RESPONSE = 12; // 阶段 5 使用
+    public static final byte OFFSET_FETCH = 13;          // 查询消费组已提交位点
+    public static final byte OFFSET_FETCH_RESPONSE = 14; // 位点返回
 
     private Opcode() {
     }
