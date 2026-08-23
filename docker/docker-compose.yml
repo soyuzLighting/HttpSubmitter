@@ -1,0 +1,127 @@
+# 一键启动 3 节点 Herald 集群 + 生产/消费示例。
+# 用法：docker compose -f docker/docker-compose.yml up --build
+services:
+  broker-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      HERALD_SERVICE: server
+      HERALD_NODE_ID: "0"
+      HERALD_ADVERTISED_HOST: broker-1
+      HERALD_PORT: "9092"
+      HERALD_RAFT_PORT: "6000"
+      HERALD_DEFAULT_PARTITIONS: "1"
+      HERALD_REPLICATION_FACTOR: "3"
+      HERALD_DATA_DIR: /data
+      HERALD_PEERS: "1:broker-2:9092:6001,2:broker-3:9092:6002"
+    volumes:
+      - broker-1-data:/data
+    networks:
+      - herald
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9092' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  broker-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      HERALD_SERVICE: server
+      HERALD_NODE_ID: "1"
+      HERALD_ADVERTISED_HOST: broker-2
+      HERALD_PORT: "9092"
+      HERALD_RAFT_PORT: "6001"
+      HERALD_DEFAULT_PARTITIONS: "1"
+      HERALD_REPLICATION_FACTOR: "3"
+      HERALD_DATA_DIR: /data
+      HERALD_PEERS: "0:broker-1:9092:6000,2:broker-3:9092:6002"
+    volumes:
+      - broker-2-data:/data
+    networks:
+      - herald
+    ports:
+      - "9093:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9092' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  broker-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      HERALD_SERVICE: server
+      HERALD_NODE_ID: "2"
+      HERALD_ADVERTISED_HOST: broker-3
+      HERALD_PORT: "9092"
+      HERALD_RAFT_PORT: "6002"
+      HERALD_DEFAULT_PARTITIONS: "1"
+      HERALD_REPLICATION_FACTOR: "3"
+      HERALD_DATA_DIR: /data
+      HERALD_PEERS: "0:broker-1:9092:6000,1:broker-2:9092:6001"
+    volumes:
+      - broker-3-data:/data
+    networks:
+      - herald
+    ports:
+      - "9094:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9092' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  producer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      HERALD_SERVICE: producer
+      HERALD_BOOTSTRAP_SERVERS: "broker-1:9092,broker-2:9092,broker-3:9092"
+      HERALD_TOPIC: notify
+      HERALD_TARGET_URL: "http://vendor.example.com/callback"
+      HERALD_COUNT: "5"
+    depends_on:
+      broker-1:
+        condition: service_healthy
+      broker-2:
+        condition: service_healthy
+      broker-3:
+        condition: service_healthy
+    networks:
+      - herald
+
+  consumer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      HERALD_SERVICE: consumer
+      HERALD_BOOTSTRAP_SERVERS: "broker-1:9092,broker-2:9092,broker-3:9092"
+      HERALD_GROUP_ID: demo-consumer
+      HERALD_TOPICS: notify
+    depends_on:
+      broker-1:
+        condition: service_healthy
+      broker-2:
+        condition: service_healthy
+      broker-3:
+        condition: service_healthy
+    networks:
+      - herald
+
+volumes:
+  broker-1-data:
+  broker-2-data:
+  broker-3-data:
+
+networks:
+  herald:

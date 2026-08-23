@@ -1,0 +1,15 @@
+spring:
+  main:
+    web-application-type: none
+
+herald:
+  consumer:
+    bootstrap-servers: ${HERALD_BOOTSTRAP_SERVERS:127.0.0.1:9092}
+    group-id: ${HERALD_GROUP_ID:demo-consumer}
+    topics: ${HERALD_TOPICS:notify}
+    poll-interval-ms: 100
+    delivery-concurrency: 4
+    delivery:
+      max-retries: 3
+      retry-backoff-ms: 1000
+      timeout-ms: 5000

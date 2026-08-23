@@ -1,0 +1,16 @@
+spring:
+  main:
+    web-application-type: none
+
+herald:
+  broker:
+    node-id: ${HERALD_NODE_ID:0}
+    host: 0.0.0.0
+    advertised-host: ${HERALD_ADVERTISED_HOST:127.0.0.1}
+    port: ${HERALD_PORT:9092}
+    data-dir: ${HERALD_DATA_DIR:/data}
+    default-partitions: ${HERALD_DEFAULT_PARTITIONS:4}
+    replication-factor: ${HERALD_REPLICATION_FACTOR:1}
+    raft-port: ${HERALD_RAFT_PORT:0}
+    flush-mode: ${HERALD_FLUSH_MODE:async}
+    peers: ${HERALD_PEERS:}

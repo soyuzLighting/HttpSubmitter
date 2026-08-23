@@ -1,0 +1,12 @@
+spring:
+  main:
+    web-application-type: none
+
+herald:
+  producer:
+    bootstrap-servers: ${HERALD_BOOTSTRAP_SERVERS:127.0.0.1:9092}
+    client-id: demo-producer
+    linger-ms: 5
+    acks: ${HERALD_ACKS:1}
+    retries: 3
+    request-timeout-ms: 5000

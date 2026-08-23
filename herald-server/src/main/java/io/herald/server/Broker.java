@@ -461,7 +461,7 @@ public final class Broker implements AutoCloseable, RaftEventListener {
         }
         Map<Integer, String> peerAddrs = new LinkedHashMap<>();
         config.peers().forEach((id, peer) -> peerAddrs.put(id, peer.host() + ":" + peer.raftPort()));
-        return new SocketRaftTransport(config.advertisedHost(), config.raftPort(), peerAddrs, 2000);
+        return new SocketRaftTransport(config.host(), config.raftPort(), peerAddrs, 2000);
     }
 
     private static void sleepQuietly(long ms) {
