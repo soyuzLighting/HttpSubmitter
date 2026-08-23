@@ -29,22 +29,41 @@ public final class BrokerConnectionPool implements AutoCloseable {
         int n = addresses.size();
         for (int i = 0; i < n; i++) {
             String addr = addresses.get((int) Math.floorMod(roundRobin.getAndIncrement(), n));
-            BrokerConnection conn = connections.get(addr);
-            if (conn == null) {
-                conn = tryConnect(addr);
-                if (conn != null) {
-                    BrokerConnection prev = connections.putIfAbsent(addr, conn);
-                    if (prev != null) {
-                        conn.close();
-                        conn = prev;
-                    }
-                }
-            }
-            if (conn != null && conn.isActive()) {
+            BrokerConnection conn = connectTo(addr);
+            if (conn != null) {
                 return conn;
             }
         }
         throw new ProducerException("no available broker among " + addresses);
+    }
+
+    /** 返回到指定地址的连接，失败抛出 {@link ProducerException}。 */
+    public BrokerConnection acquire(String address) {
+        BrokerConnection conn = connectTo(address);
+        if (conn == null) {
+            throw new ProducerException("no available broker at " + address);
+        }
+        return conn;
+    }
+
+    private BrokerConnection connectTo(String addr) {
+        BrokerConnection conn = connections.get(addr);
+        if (conn == null) {
+            BrokerConnection fresh = tryConnect(addr);
+            if (fresh != null) {
+                BrokerConnection prev = connections.putIfAbsent(addr, fresh);
+                if (prev != null) {
+                    fresh.close();
+                    conn = prev;
+                } else {
+                    conn = fresh;
+                }
+            }
+        }
+        if (conn != null && conn.isActive()) {
+            return conn;
+        }
+        return null;
     }
 
     @Override

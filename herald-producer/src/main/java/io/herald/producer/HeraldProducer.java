@@ -141,7 +141,7 @@ public final class HeraldProducer implements AutoCloseable {
         if (config.acks() == 0) {
             Frame frame = new Frame(Opcode.PRODUCE, Map.of(), buildProduceRequest(batch).encode());
             try {
-                connection().send(frame);
+                route(batch).send(frame);
                 completeBatch(batch, -1);
             } catch (RuntimeException e) {
                 failBatch(batch, -1);
@@ -155,14 +155,16 @@ public final class HeraldProducer implements AutoCloseable {
         Frame frame = new Frame(Opcode.PRODUCE, Map.of(), buildProduceRequest(batch).encode());
         CompletableFuture<Frame> respFuture;
         try {
-            respFuture = connection().send(frame);
+            respFuture = route(batch).send(frame);
         } catch (RuntimeException e) {
+            refreshMetadata(batch.topic);
             retryOrFail(batch, attempt, -1);
             return;
         }
         respFuture.orTimeout(config.requestTimeoutMs(), TimeUnit.MILLISECONDS)
                 .whenComplete((respFrame, err) -> {
                     if (err != null) {
+                        refreshMetadata(batch.topic);
                         retryOrFail(batch, attempt, -1);
                         return;
                     }
@@ -173,12 +175,31 @@ public final class HeraldProducer implements AutoCloseable {
                         } else if (resp.errorCode() == ErrorCode.MESSAGE_TOO_LARGE) {
                             failBatch(batch, resp.errorCode());
                         } else {
+                            if (resp.errorCode() == ErrorCode.NOT_LEADER_OR_FOLLOWER) {
+                                refreshMetadata(batch.topic);
+                            }
                             retryOrFail(batch, attempt, resp.errorCode());
                         }
                     } catch (RuntimeException e) {
                         retryOrFail(batch, attempt, -1);
                     }
                 });
+    }
+
+    /** 按分区 leader 地址选择连接；未知则刷新元数据，仍未知回退轮询。 */
+    private BrokerConnection route(RecordAccumulator.ProducerBatch batch) {
+        String addr = metadata.leaderAddress(batch.topic, batch.partition);
+        if (addr == null) {
+            refreshMetadata(batch.topic);
+            addr = metadata.leaderAddress(batch.topic, batch.partition);
+        }
+        if (addr == null) {
+            addr = metadata.anyBrokerAddress();
+        }
+        if (addr == null) {
+            return connection();
+        }
+        return pool.acquire(addr);
     }
 
     private void retryOrFail(RecordAccumulator.ProducerBatch batch, int attempt, int errorCode) {
@@ -235,7 +256,7 @@ public final class HeraldProducer implements AutoCloseable {
                     .orTimeout(config.requestTimeoutMs(), TimeUnit.MILLISECONDS)
                     .join();
             MetadataResponse md = MetadataResponse.decode(ByteBuffer.wrap(resp.body()));
-            metadata.update(md.topics());
+            metadata.update(md);
         } catch (Exception ignored) {
             // 保留旧缓存，路由时回退到单分区
         }

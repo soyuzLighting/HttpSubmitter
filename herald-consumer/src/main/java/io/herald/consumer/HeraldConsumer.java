@@ -1,7 +1,7 @@
 package io.herald.consumer;
 
+import io.herald.protocol.BrokerInfo;
 import io.herald.protocol.CommitOffsetRequest;
-import io.herald.protocol.CommitOffsetResponse;
 import io.herald.protocol.ErrorCode;
 import io.herald.protocol.FetchRequest;
 import io.herald.protocol.FetchResponse;
@@ -28,14 +28,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 消费端 SDK：拉取循环 + 并发投递 + 重试退避 + offset 提交 + DLQ。
+ * 消费端 SDK：拉取循环 + 并发投递 + 重试退避 + offset 提交 + DLQ。按分区 leader 定向连接。
  *
  * <pre>{@code
  * HeraldConsumer consumer = HeraldConsumer.builder()
  *     .bootstrapServers("127.0.0.1:9092")
  *     .groupId("crm-notifier")
  *     .topics("user-subscribed")
- *     .deliveryConfig(new DeliveryConfig().maxRetries(5).retryBackoffMs(1000))
  *     .build();
  * consumer.start();
  * }</pre>
@@ -52,7 +51,10 @@ public final class HeraldConsumer implements AutoCloseable {
     private final AtomicBoolean running = new AtomicBoolean();
     private final Map<String, Map<Integer, Long>> offsets = new ConcurrentHashMap<>();
 
-    private volatile ConsumerConnection connection;
+    private final Map<String, ConsumerConnection> connections = new ConcurrentHashMap<>();
+    private volatile Map<Integer, BrokerInfo> brokers = Map.of();
+    private final Map<String, List<Integer>> topicLeaders = new ConcurrentHashMap<>();
+
     private volatile List<PartitionCursor> cursors = new ArrayList<>();
     private Thread consumerThread;
     private volatile long lastDiscovery;
@@ -77,7 +79,6 @@ public final class HeraldConsumer implements AutoCloseable {
         if (!running.compareAndSet(false, true)) {
             return;
         }
-        connect();
         discoverPartitions();
         lastDiscovery = System.currentTimeMillis();
         consumerThread = new Thread(this::run, "herald-consumer");
@@ -94,9 +95,8 @@ public final class HeraldConsumer implements AutoCloseable {
             consumerThread.interrupt();
         }
         deliveryExecutor.shutdownNow();
-        if (connection != null) {
-            connection.close();
-        }
+        connections.values().forEach(ConsumerConnection::close);
+        connections.clear();
     }
 
     private void run() {
@@ -110,7 +110,8 @@ public final class HeraldConsumer implements AutoCloseable {
                 try {
                     anyData |= fetchAndProcess(cursor);
                 } catch (IOException e) {
-                    reconnect();
+                    invalidateConnection(cursor.leaderAddress);
+                    discoverPartitions();
                     break;
                 }
             }
@@ -127,8 +128,12 @@ public final class HeraldConsumer implements AutoCloseable {
                 .fetchOffset(cursor.nextOffset)
                 .maxCount(config.fetchMaxCount())
                 .maxBytes(config.fetchMaxBytes());
-        Frame resp = connection.send(new Frame(Opcode.FETCH, Map.of(), req.encode()));
+        Frame resp = connectionFor(cursor.leaderAddress).send(new Frame(Opcode.FETCH, Map.of(), req.encode()));
         FetchResponse fetch = FetchResponse.decode(ByteBuffer.wrap(resp.body()));
+        if (fetch.errorCode() == ErrorCode.NOT_LEADER_OR_FOLLOWER) {
+            discoverPartitions();
+            return false;
+        }
         if (fetch.errorCode() != ErrorCode.OK) {
             return false;
         }
@@ -139,7 +144,7 @@ public final class HeraldConsumer implements AutoCloseable {
         deliver(cursor, messages);
         long committed = fetch.nextOffset();
         if (config.commitEnabled()) {
-            commit(cursor.topic, cursor.partition, committed);
+            commit(cursor, committed);
         }
         cursor.nextOffset = committed;
         offsets.computeIfAbsent(cursor.topic, t -> new ConcurrentHashMap<>())
@@ -154,7 +159,7 @@ public final class HeraldConsumer implements AutoCloseable {
                     .supplyAsync(() -> deliverWithRetry(m), deliveryExecutor)
                     .thenAccept(ok -> {
                         if (!ok) {
-                            writeToDlq(cursor.topic, m, "delivery failed after " + deliveryConfig.maxRetries() + " retries");
+                            writeToDlq(cursor, m, "delivery failed after " + deliveryConfig.maxRetries() + " retries");
                         }
                     }));
         }
@@ -185,17 +190,17 @@ public final class HeraldConsumer implements AutoCloseable {
         return base + ThreadLocalRandom.current().nextLong(Math.max(1, base / 4));
     }
 
-    private void commit(String topic, int partition, long offset) {
+    private void commit(PartitionCursor cursor, long offset) {
         try {
             CommitOffsetRequest req = new CommitOffsetRequest()
-                    .groupId(config.groupId()).topic(topic).partition(partition).committedOffset(offset);
-            connection.send(new Frame(Opcode.COMMIT_OFFSET, Map.of(), req.encode()));
+                    .groupId(config.groupId()).topic(cursor.topic).partition(cursor.partition).committedOffset(offset);
+            connectionFor(cursor.leaderAddress).send(new Frame(Opcode.COMMIT_OFFSET, Map.of(), req.encode()));
         } catch (IOException e) {
-            log.warn("commit failed topic={} partition={} offset={}", topic, partition, offset, e);
+            log.warn("commit failed topic={} partition={} offset={}", cursor.topic, cursor.partition, offset, e);
         }
     }
 
-    private void writeToDlq(String originalTopic, Message message, String reason) {
+    private void writeToDlq(PartitionCursor cursor, Message message, String reason) {
         try {
             Message dlq = new Message()
                     .key(message.key())
@@ -204,16 +209,17 @@ public final class HeraldConsumer implements AutoCloseable {
                     .headers(message.headers())
                     .body(message.body())
                     .addHeader("x-herald-dlq-reason", reason)
-                    .addHeader("x-herald-dlq-original-topic", originalTopic);
+                    .addHeader("x-herald-dlq-original-topic", cursor.topic);
             ProduceRequest req = new ProduceRequest()
-                    .topic(originalTopic + ".DLQ").partition(-1).acks(1).addMessage(dlq);
-            connection.send(new Frame(Opcode.PRODUCE, Map.of(), req.encode()));
+                    .topic(cursor.topic + ".DLQ").partition(-1).acks(1).addMessage(dlq);
+            connectionFor(cursor.leaderAddress).send(new Frame(Opcode.PRODUCE, Map.of(), req.encode()));
         } catch (IOException e) {
-            log.warn("write to DLQ failed originalTopic={}", originalTopic, e);
+            log.warn("write to DLQ failed originalTopic={}", cursor.topic, e);
         }
     }
 
     private void discoverPartitions() {
+        refreshMetadata();
         List<PartitionCursor> newCursors = new ArrayList<>();
         for (String topic : config.topics()) {
             int count = partitionCount(topic);
@@ -222,7 +228,7 @@ public final class HeraldConsumer implements AutoCloseable {
             }
             for (int p = 0; p < count; p++) {
                 long off = offsetOf(topic, p);
-                newCursors.add(new PartitionCursor(topic, p, off));
+                newCursors.add(new PartitionCursor(topic, p, off, leaderAddress(topic, p)));
             }
         }
         cursors = newCursors;
@@ -236,15 +242,43 @@ public final class HeraldConsumer implements AutoCloseable {
         }
     }
 
-    private int partitionCount(String topic) {
+    private void refreshMetadata() {
         try {
-            MetadataRequest req = new MetadataRequest().topic(topic);
-            Frame resp = connection.send(new Frame(Opcode.METADATA, Map.of(), req.encode()));
+            MetadataRequest req = new MetadataRequest();
+            Frame resp = connectionFor(anyAddress()).send(new Frame(Opcode.METADATA, Map.of(), req.encode()));
             MetadataResponse md = MetadataResponse.decode(ByteBuffer.wrap(resp.body()));
-            return md.topics().getOrDefault(topic, 0);
+            if (!md.brokers().isEmpty()) {
+                brokers = new ConcurrentHashMap<>(md.brokers());
+            }
+            md.topicLeaders().forEach((topic, leaders) -> topicLeaders.put(topic, new ArrayList<>(leaders)));
         } catch (IOException e) {
-            return 0;
+            log.debug("metadata refresh failed", e);
         }
+    }
+
+    private int partitionCount(String topic) {
+        List<Integer> leaders = topicLeaders.get(topic);
+        return leaders == null ? 0 : leaders.size();
+    }
+
+    private int leaderOf(String topic, int partition) {
+        List<Integer> leaders = topicLeaders.get(topic);
+        if (leaders == null || partition < 0 || partition >= leaders.size()) {
+            return -1;
+        }
+        return leaders.get(partition);
+    }
+
+    private String leaderAddress(String topic, int partition) {
+        BrokerInfo b = brokers.get(leaderOf(topic, partition));
+        return b == null ? null : b.host() + ":" + b.port();
+    }
+
+    private String anyAddress() {
+        for (BrokerInfo b : brokers.values()) {
+            return b.host() + ":" + b.port();
+        }
+        return config.bootstrapServers().split(",")[0].trim();
     }
 
     private long offsetOf(String topic, int partition) {
@@ -256,29 +290,36 @@ public final class HeraldConsumer implements AutoCloseable {
         return v == null ? config.initialOffset() : v;
     }
 
-    private void connect() {
-        String addr = config.bootstrapServers().split(",")[0].trim();
-        int idx = addr.lastIndexOf(':');
-        String host = addr.substring(0, idx);
-        int port = Integer.parseInt(addr.substring(idx + 1));
-        try {
-            connection = ConsumerConnection.connect(host, port, config.connectTimeoutMs());
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to connect to broker " + addr, e);
+    private ConsumerConnection connectionFor(String address) {
+        if (address == null) {
+            address = anyAddress();
+        }
+        ConsumerConnection conn = connections.get(address);
+        if (conn == null || conn.isClosed()) {
+            conn = connectTo(address);
+            connections.put(address, conn);
+        }
+        return conn;
+    }
+
+    private void invalidateConnection(String address) {
+        if (address == null) {
+            return;
+        }
+        ConsumerConnection conn = connections.remove(address);
+        if (conn != null) {
+            conn.close();
         }
     }
 
-    private void reconnect() {
-        ConsumerConnection old = connection;
-        connection = null;
-        if (old != null) {
-            old.close();
-        }
+    private ConsumerConnection connectTo(String address) {
+        int idx = address.lastIndexOf(':');
+        String host = address.substring(0, idx);
+        int port = Integer.parseInt(address.substring(idx + 1));
         try {
-            connect();
-            discoverPartitions();
-        } catch (RuntimeException e) {
-            log.warn("reconnect failed", e);
+            return ConsumerConnection.connect(host, port, config.connectTimeoutMs());
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to connect to broker " + address, e);
         }
     }
 
@@ -293,12 +334,14 @@ public final class HeraldConsumer implements AutoCloseable {
     private static final class PartitionCursor {
         final String topic;
         final int partition;
+        volatile String leaderAddress;
         volatile long nextOffset;
 
-        PartitionCursor(String topic, int partition, long nextOffset) {
+        PartitionCursor(String topic, int partition, long nextOffset, String leaderAddress) {
             this.topic = topic;
             this.partition = partition;
             this.nextOffset = nextOffset;
+            this.leaderAddress = leaderAddress;
         }
     }
 
