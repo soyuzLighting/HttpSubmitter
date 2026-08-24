@@ -33,20 +33,20 @@
 
 ## 2. 工程结构
 
-| 模块 | 说明 |
-|------|------|
-| `herald-common` | 消息模型、配置、snowflake、工具 |
-| `herald-protocol` | 二进制编解码、帧、opcode |
-| `herald-storage` | 存储引擎（段 / 索引 / 刷盘 / 恢复） |
-| `herald-raft` | 内嵌 Raft（选举 / 日志 / 状态机 / 元数据） |
-| `herald-server` | Broker（Netty 数据面 + 分区管理 + 复制） |
-| `herald-producer` | 生产端 core |
-| `herald-producer-spring-boot-starter` | 生产端 Starter |
-| `herald-consumer` | 消费端 core + HTTP 投递器 |
-| `herald-consumer-spring-boot-starter` | 消费端 Starter |
-| `herald-examples` | server / producer / consumer 三个 Spring Boot 示例 |
-| `herald-scripts` | Python 压测 / 可靠性测试脚本（直连二进制协议） |
-| `docker` | Dockerfile / docker-compose 一键集群 |
+| 模块                                    | 说明                                             |
+|---------------------------------------|------------------------------------------------|
+| `herald-common`                       | 消息模型、配置、snowflake、工具                           |
+| `herald-protocol`                     | 二进制编解码、帧、opcode                                |
+| `herald-storage`                      | 存储引擎（段 / 索引 / 刷盘 / 恢复）                         |
+| `herald-raft`                         | 内嵌 Raft（选举 / 日志 / 状态机 / 元数据）                   |
+| `herald-server`                       | Broker（Netty 数据面 + 分区管理 + 复制）                  |
+| `herald-producer`                     | 生产端 core                                       |
+| `herald-producer-spring-boot-starter` | 生产端 Starter                                    |
+| `herald-consumer`                     | 消费端 core + HTTP 投递器                            |
+| `herald-consumer-spring-boot-starter` | 消费端 Starter                                    |
+| `herald-examples`                     | server / producer / consumer 三个 Spring Boot 示例 |
+| `herald-scripts`                      | Python 压测 / 可靠性测试脚本（直连二进制协议）                   |
+| `docker`                              | Dockerfile / docker-compose 一键集群               |
 
 ---
 
@@ -81,17 +81,17 @@ java -jar herald-examples/server-example/target/server-example-1.0.0-SNAPSHOT.ja
 
 主要环境变量（前缀 `herald.broker.*`）：
 
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `HERALD_NODE_ID` | `0` | 节点 ID |
-| `HERALD_PORT` | `9092` | 数据面端口 |
-| `HERALD_RAFT_PORT` | `0` | Raft 端口（集群需指定） |
-| `HERALD_ADVERTISED_HOST` | `127.0.0.1` | 对外通告地址 |
-| `HERALD_DATA_DIR` | `/data` | 数据目录 |
-| `HERALD_DEFAULT_PARTITIONS` | `4` | 默认分区数 |
-| `HERALD_REPLICATION_FACTOR` | `1` | 复制因子 |
-| `HERALD_FLUSH_MODE` | `async` | 刷盘模式（`async` / `sync`） |
-| `HERALD_PEERS` | 空 | 集群其余节点，格式 `id:host:dataPort:raftPort`（逗号分隔，不含自身） |
+| 变量                          | 默认          | 说明                                               |
+|-----------------------------|-------------|--------------------------------------------------|
+| `HERALD_NODE_ID`            | `0`         | 节点 ID                                            |
+| `HERALD_PORT`               | `9092`      | 数据面端口                                            |
+| `HERALD_RAFT_PORT`          | `0`         | Raft 端口（集群需指定）                                   |
+| `HERALD_ADVERTISED_HOST`    | `127.0.0.1` | 对外通告地址                                           |
+| `HERALD_DATA_DIR`           | `/data`     | 数据目录                                             |
+| `HERALD_DEFAULT_PARTITIONS` | `4`         | 默认分区数                                            |
+| `HERALD_REPLICATION_FACTOR` | `1`         | 复制因子                                             |
+| `HERALD_FLUSH_MODE`         | `async`     | 刷盘模式（`async` / `sync`）                           |
+| `HERALD_PEERS`              | 空           | 集群其余节点，格式 `id:host:dataPort:raftPort`（逗号分隔，不含自身） |
 
 ### 4.2 启动消费端（投递）
 
